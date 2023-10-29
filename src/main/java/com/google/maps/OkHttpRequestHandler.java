@@ -17,25 +17,25 @@ package com.google.maps;
 
 import com.google.gson.FieldNamingPolicy;
 import com.google.maps.GeoApiContext.RequestHandler;
+import com.google.maps.android.AndroidAuthenticationConfig;
+import com.google.maps.android.AndroidAuthenticationConfigProvider;
+import com.google.maps.android.AndroidAuthenticationInterceptor;
 import com.google.maps.internal.ApiResponse;
 import com.google.maps.internal.ExceptionsAllowedToRetry;
-import com.google.maps.internal.HttpHeaders;
 import com.google.maps.internal.OkHttpPendingResult;
 import com.google.maps.internal.RateLimitExecutorService;
 import com.google.maps.metrics.RequestMetrics;
-import java.io.IOException;
 import java.net.Proxy;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
-import okhttp3.Authenticator;
 import okhttp3.Credentials;
 import okhttp3.Dispatcher;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
-import okhttp3.Response;
-import okhttp3.Route;
 
 /**
  * A strategy for handling URL requests using OkHttp.
@@ -56,17 +56,16 @@ public class OkHttpRequestHandler implements GeoApiContext.RequestHandler {
   public <T, R extends ApiResponse<T>> PendingResult<T> handle(
       String hostName,
       String url,
-      String userAgent,
-      String experienceIdHeaderValue,
+      Map<String, String> headers,
       Class<R> clazz,
       FieldNamingPolicy fieldNamingPolicy,
       long errorTimeout,
       Integer maxRetries,
       ExceptionsAllowedToRetry exceptionsAllowedToRetry,
       RequestMetrics metrics) {
-    Request.Builder builder = new Request.Builder().get().header("User-Agent", userAgent);
-    if (experienceIdHeaderValue != null) {
-      builder = builder.header(HttpHeaders.X_GOOG_MAPS_EXPERIENCE_ID, experienceIdHeaderValue);
+    Request.Builder builder = new Request.Builder().get();
+    for (Entry<String, String> entry : headers.entrySet()) {
+      builder = builder.header(entry.getKey(), entry.getValue());
     }
     Request req = builder.url(hostName + url).build();
 
@@ -86,8 +85,7 @@ public class OkHttpRequestHandler implements GeoApiContext.RequestHandler {
       String hostName,
       String url,
       String payload,
-      String userAgent,
-      String experienceIdHeaderValue,
+      Map<String, String> headers,
       Class<R> clazz,
       FieldNamingPolicy fieldNamingPolicy,
       long errorTimeout,
@@ -95,10 +93,9 @@ public class OkHttpRequestHandler implements GeoApiContext.RequestHandler {
       ExceptionsAllowedToRetry exceptionsAllowedToRetry,
       RequestMetrics metrics) {
     RequestBody body = RequestBody.create(JSON, payload);
-    Request.Builder builder = new Request.Builder().post(body).header("User-Agent", userAgent);
-
-    if (experienceIdHeaderValue != null) {
-      builder = builder.header(HttpHeaders.X_GOOG_MAPS_EXPERIENCE_ID, experienceIdHeaderValue);
+    Request.Builder builder = new Request.Builder().post(body);
+    for (Entry<String, String> entry : headers.entrySet()) {
+      builder = builder.header(entry.getKey(), entry.getValue());
     }
     Request req = builder.url(hostName + url).build();
 
@@ -130,6 +127,11 @@ public class OkHttpRequestHandler implements GeoApiContext.RequestHandler {
       rateLimitExecutorService = new RateLimitExecutorService();
       dispatcher = new Dispatcher(rateLimitExecutorService);
       builder.dispatcher(dispatcher);
+
+      final AndroidAuthenticationConfigProvider provider =
+          new AndroidAuthenticationConfigProvider();
+      final AndroidAuthenticationConfig config = provider.provide();
+      builder.addInterceptor(new AndroidAuthenticationInterceptor(config));
     }
 
     @Override
@@ -168,18 +170,14 @@ public class OkHttpRequestHandler implements GeoApiContext.RequestHandler {
     public Builder proxyAuthentication(String proxyUserName, String proxyUserPassword) {
       final String userName = proxyUserName;
       final String password = proxyUserPassword;
-
       builder.proxyAuthenticator(
-          new Authenticator() {
-            @Override
-            public Request authenticate(Route route, Response response) throws IOException {
-              String credential = Credentials.basic(userName, password);
-              return response
-                  .request()
-                  .newBuilder()
-                  .header("Proxy-Authorization", credential)
-                  .build();
-            }
+          (route, response) -> {
+            String credential = Credentials.basic(userName, password);
+            return response
+                .request()
+                .newBuilder()
+                .header("Proxy-Authorization", credential)
+                .build();
           });
       return this;
     }
